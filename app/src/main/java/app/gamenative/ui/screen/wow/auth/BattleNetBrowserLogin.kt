@@ -52,7 +52,7 @@ internal object BattleNetBrowserLogin {
     class Launch(val command: String, val onExit: (Int) -> Unit)
 
     fun enabled(context: Context): Boolean = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        .getBoolean("enabled", false)
+        .getBoolean("enabled", true) // CN patch: default browser login on (avoids device-confirmation disconnect)
 
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", enabled).apply()
