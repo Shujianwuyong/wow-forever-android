@@ -112,6 +112,9 @@ fun WoWForeverScreen(
     var statusText by remember { mutableStateOf(READY_STATUS) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var diagText by remember { mutableStateOf<String?>(null) }
+    var integrityText by remember { mutableStateOf<String?>(null) }
+    var isVerifying by remember { mutableStateOf(false) }
+    var showRepairDialog by remember { mutableStateOf(false) }
     var showStoragePermissionDialog by remember { mutableStateOf(false) }
     var versionStatus by remember { mutableStateOf<WowClientDownloader.VersionCheckResult?>(null) }
     var isCheckingVersion by remember { mutableStateOf(false) }
@@ -379,6 +382,54 @@ fun WoWForeverScreen(
         }
     }
 
+    fun verifyFiles() {
+        if (isVerifying || isUpdating || isLaunching) return
+        if (!files.hasStorageAccess) {
+            showStoragePermissionDialog = true
+            return
+        }
+        isVerifying = true
+        integrityText = "Checking client files against the China build..."
+        errorMessage = null
+        scope.launch {
+            try {
+                val report = withContext(Dispatchers.IO) {
+                    WowClientDownloader.verifyIntegrity(File(gamePath), GameRegion.CN.cdnRegion) { msg ->
+                        scope.launch(Dispatchers.Main) { integrityText = msg }
+                    }
+                }
+                integrityText = buildString {
+                    append("=== INTEGRITY CHECK (build ${report.version}) ===\n")
+                    append("Client files: ${report.verified}/${report.total} verified OK\n")
+                    append("  missing: ${report.missing}   corrupt: ${report.corrupt}\n")
+                    append("Archive indexes missing: ${report.indexMissing}\n")
+                    append("Result: ${if (report.isComplete) "COMPLETE - all files match the CN build" else "INCOMPLETE - use RE-DOWNLOAD CN CLIENT below"}\n")
+                    report.problems.forEach { append("  - $it\n") }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Integrity check failed")
+                if (e.isPermissionDenied()) denyStorageAccess()
+                integrityText = "Integrity check failed: ${e.message}"
+            } finally {
+                isVerifying = false
+            }
+        }
+    }
+
+    fun performRepair() {
+        showRepairDialog = false
+        integrityText = null
+        // A clean re-download must always use the China build, regardless of the saved/inferred region.
+        downloadGameFiles("Re-download failed", { root, onStatus ->
+            WowClientDownloader.repairClient(root, GameRegion.CN.cdnRegion, onStatus)
+        }) {
+            versionStatus = null
+            checkFiles()
+            checkVersionStatus()
+            SnackbarManager.show("China client re-downloaded and verified")
+        }
+    }
+
     LaunchedEffect(gamePath) {
         val ready = checkFiles()
         // Every setup path reads or writes shared storage, so ask up front rather than after the user picks one.
@@ -539,6 +590,10 @@ fun WoWForeverScreen(
                         Text(text = "=== DIAGNOSTICS ===", fontSize = 12.sp, color = WowGold, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(text = d, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = WowSubtle)
+                    }
+                    integrityText?.let { t ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(text = t, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = WowGold)
                     }
                 }
             }
@@ -714,6 +769,14 @@ fun WoWForeverScreen(
                         LinkButton("Diagnostics", Icons.Default.Warning) {
                             diagText = buildDiagnostics(context, gamePath)
                         }
+                        if (!files.needsInstall && !files.isWrongGame) {
+                            LinkButton("Verify Files", Icons.Default.CheckCircle, enabled = !isVerifying && !isUpdating && !isLaunching) {
+                                verifyFiles()
+                            }
+                            LinkButton("Re-download CN", Icons.Default.Download, enabled = !isUpdating && !isLaunching) {
+                                showRepairDialog = true
+                            }
+                        }
                         if (!files.needsInstall) {
                             LinkButton("Location", Icons.Default.FolderOpen) { folderPicker.launch(null) }
                             // Some file managers label zips as generic binary files, so both types are offered.
@@ -809,6 +872,40 @@ fun WoWForeverScreen(
                     TextButton(onClick = { showUpgradeDialog = false }) {
                         Text("LATER", color = WowMuted)
                     }
+                }
+            },
+            containerColor = Color(0xFF1B2838),
+            shape = RoundedCornerShape(16.dp),
+        )
+    }
+
+    if (showRepairDialog) {
+        AlertDialog(
+            onDismissRequest = { showRepairDialog = false },
+            title = { Text(text = "Re-download China client?", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = WowGold) },
+            text = {
+                Text(
+                    text = "This deletes every local client file and archive index, then downloads a fresh copy " +
+                        "from NetEase's China CDN. Your settings (WTF) and add-ons (Interface) are kept. " +
+                        "Use this when the integrity check reports missing or corrupt files, or when logging in " +
+                        "disconnects with WOW51900243. It requires a stable Wi-Fi connection.",
+                    fontSize = 13.sp,
+                    color = Color(0xFFE2E8F0),
+                    lineHeight = 18.sp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = ::performRepair,
+                    colors = ButtonDefaults.buttonColors(containerColor = WowBronze, contentColor = Color.White),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text("RE-DOWNLOAD", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRepairDialog = false }) {
+                    Text("CANCEL", color = WowMuted)
                 }
             },
             containerColor = Color(0xFF1B2838),
