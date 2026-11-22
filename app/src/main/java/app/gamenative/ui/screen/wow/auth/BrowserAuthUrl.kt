@@ -9,7 +9,11 @@ import java.util.Locale
 internal object BrowserAuthUrl {
     private const val MAX_URL_LENGTH = 16_384
     private const val MAX_TICKET_LENGTH = 2_048
-    private val navigationDomains = listOf("battle.net", "blizzard.com", "battlenet.com.cn", "blizzard.cn")
+    private val navigationDomains = listOf(
+        "battle.net", "blizzard.com", "battlenet.com.cn", "blizzard.cn",
+        // CN sign-in hands off to NetEase account services (mandatory since 2025-06).
+        "163.com", "126.com", "yeah.net", "netease.com",
+    )
 
     fun isInitialUrl(value: String): Boolean = httpsHost(value)?.let { belongsTo(it, "battle.net") || belongsTo(it, "battlenet.com.cn") } == true
 
@@ -45,6 +49,9 @@ internal object BrowserAuthUrl {
 
     /** The dialog shows the site's origin only. The path and query can contain sign-in credentials. */
     fun displayOrigin(value: String): String? = httpsHost(value)?.let { "https://$it" }
+
+    /** Host only, for safe diagnostics (never include path/query: they can carry credentials). */
+    fun hostOf(value: String): String? = httpsHost(value)
 
     private fun httpsHost(value: String): String? {
         val uri = parse(value) ?: return null
