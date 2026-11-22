@@ -1383,6 +1383,9 @@ internal fun ensureGameConfig(root: File, screenSize: String, region: GameRegion
         configWtf.writeText(CONFIG_DEFAULTS.entries.joinToString("\n") { "SET ${it.key} ${it.value}" } + "\n")
     }
 
+    // CN patch: keep .build.info's Branch in sync with the selected region so the game connects to the right
+    // servers. A stale US Branch here makes the client hit US realms and disconnect at character select (WOW51900243).
+    region?.let { WowClientDownloader.forceRegionBranch(File(root, BUILD_INFO), it.cdnRegion) }
     val forced = mapOf("gxApi" to CONFIG_DEFAULTS.getValue("gxApi"), "portal" to "\"${region?.name ?: portalOf(root)}\"") +
         RESOLUTION_KEYS.associateWith { "\"$screenSize\"" }
     val forcedLines = forced.map { (key, value) -> "SET $key $value" }
