@@ -111,6 +111,7 @@ fun WoWForeverScreen(
     var showLoginDialog by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf(READY_STATUS) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var diagText by remember { mutableStateOf<String?>(null) }
     var showStoragePermissionDialog by remember { mutableStateOf(false) }
     var versionStatus by remember { mutableStateOf<WowClientDownloader.VersionCheckResult?>(null) }
     var isCheckingVersion by remember { mutableStateOf(false) }
@@ -531,6 +532,12 @@ fun WoWForeverScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(text = "Error: $it", fontSize = 12.sp, color = WowError, fontWeight = FontWeight.Medium)
                     }
+                    diagText?.let { d ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(text = "=== DIAGNOSTICS ===", fontSize = 12.sp, color = WowGold, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(text = d, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = WowSubtle)
+                    }
                 }
             }
 
@@ -701,6 +708,9 @@ fun WoWForeverScreen(
                             checkFiles()
                             checkVersionStatus()
                             checkAppUpdate()
+                        }
+                        LinkButton("Diagnostics", Icons.Default.Warning) {
+                            diagText = buildDiagnostics(context, gamePath)
                         }
                         if (!files.needsInstall) {
                             LinkButton("Location", Icons.Default.FolderOpen) { folderPicker.launch(null) }
@@ -1400,6 +1410,52 @@ internal fun ensureGameConfig(root: File, screenSize: String, region: GameRegion
 }
 
 private val RESOLUTION_KEYS = listOf("gxFullscreenResolution", "gxWindowedResolution")
+
+/** CN diagnostics: dump the config WoW actually reads, so region/branch mismatches are visible without logcat. */
+private fun buildDiagnostics(context: android.content.Context, path: String): String {
+    val out = mutableListOf<String>()
+    val root = java.io.File(path)
+    out += "path=$path"
+    out += "savedRegion=" + (GameRegion.saved(context)?.name ?: "null") +
+        " currentRegion=" + GameRegion.current(context, path).name
+    val bi = java.io.File(root, ".build.info")
+    out += ".build.info exists=" + bi.isFile
+    if (bi.isFile) {
+        runCatching {
+            val all = bi.readLines().filter { it.isNotBlank() }
+            val header = (all.firstOrNull() ?: "").split("|").map { it.substringBefore("!") }
+            out += "header=" + header.joinToString(",")
+            val pIdx = header.indexOf("Product")
+            val col: (List<String>, String) -> String = { cells, name ->
+                val i = header.indexOf(name); if (i >= 0) cells.getOrNull(i) ?: "-" else "-"
+            }
+            all.drop(1).forEach { row ->
+                val cells = row.split("|")
+                val prod = cells.getOrNull(pIdx) ?: "?"
+                if (prod == "wowf" || prod == "wow_classic_beta" || prod == "wow") {
+                    out += "[$prod] Branch=" + col(cells, "Branch") + " Active=" + col(cells, "Active") +
+                        " Version=" + col(cells, "Version")
+                    out += "[$prod] CDNPath=" + col(cells, "CDN Path")
+                    out += "[$prod] CDNHosts=" + col(cells, "CDN Hosts")
+                    out += "[$prod] CDNServers=" + col(cells, "CDN Servers")
+                    out += "[$prod] Tags=" + col(cells, "Tags")
+                }
+            }
+        }.onFailure { out += "build.info read failed: ${it.message}" }
+    }
+    val cfg = java.io.File(root, "_forever_/WTF/Config.wtf")
+    out += "Config.wtf exists=" + cfg.isFile + " path=" + cfg.path
+    if (cfg.isFile) {
+        runCatching {
+            val keys = listOf("portal", "agentUID", "textLocale", "audioLocale", "gxApi", "gxAdapter")
+            cfg.readLines().filter { line -> keys.any { line.startsWith("SET $it ", true) } }
+                .forEach { out += it.trim() }
+        }.onFailure { out += "Config.wtf read failed: ${it.message}" }
+    }
+    out += "legacy _classic_beta_ Config.wtf exists=" + java.io.File(root, "_classic_beta_/WTF/Config.wtf").isFile
+    out += "login.txt exists=" + java.io.File(root, "login.txt").isFile
+    return out.joinToString("\n")
+}
 
 private const val CONFIG_WTF = "$FLAVOR_DIR/WTF/Config.wtf"
 
