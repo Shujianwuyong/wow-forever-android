@@ -176,10 +176,9 @@ fun WoWForeverScreen(
 
     suspend fun fetchVersionStatus() {
         isCheckingVersion = true
-        val checked = region
+        val checked = GameRegion.CN
         val status = withContext(Dispatchers.IO) { WowClientDownloader.checkVersion(File(gamePath), checked.cdnRegion) }
-        // A check for a region the player has since switched away from is stale.
-        if (checked == region) versionStatus = status
+        versionStatus = status
         isCheckingVersion = false
     }
 
@@ -359,7 +358,10 @@ fun WoWForeverScreen(
 
     fun performInstall() {
         showUpgradeDialog = false
-        downloadGameFiles("Install failed", { root, onStatus -> WowClientDownloader.install(root, region.cdnRegion, onStatus) }) {
+        // CN build: a fresh install must always fetch the China build. region state falls back to US when
+        // the client folder was deleted (no saved pick, no Config.wtf to infer from), which wrote a US Branch
+        // and made the game connect to US realms -> WOW51900243 at the license/login screen.
+        downloadGameFiles("Install failed", { root, onStatus -> WowClientDownloader.install(root, GameRegion.CN.cdnRegion, onStatus) }) {
             versionStatus = null
             if (checkFiles()) {
                 checkVersionStatus()
@@ -1275,7 +1277,7 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, scr
     val arm64Exe = File(gameRoot, "$FLAVOR_DIR/$EXE_NAME")
     if (!arm64Exe.exists()) {
         try {
-            WowClientDownloader.download(gameRoot, GameRegion.current(context, gameRoot.path).cdnRegion, onStatus)
+            WowClientDownloader.download(gameRoot, GameRegion.CN.cdnRegion, onStatus)
         } catch (e: Exception) {
             if (!arm64Exe.exists()) throw IllegalStateException("Couldn't download $EXE_NAME: ${e.message}", e)
             Timber.w(e, "Client update check failed, launching the existing $EXE_NAME")
