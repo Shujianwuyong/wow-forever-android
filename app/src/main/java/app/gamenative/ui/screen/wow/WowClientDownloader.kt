@@ -319,6 +319,40 @@ object WowClientDownloader {
         writeAtomically(buildInfo, text.toByteArray())
     }
 
+    /**
+     * CN patch: force the product row's Branch (and region tag) to [region] without touching build keys or CDN data.
+     * The launcher has no Battle.net app to keep .build.info in sync with the selected region; when it is stale
+     * (e.g. copied from a US install) the game connects to US servers and disconnects at realm selection (WOW51900243).
+     */
+    internal fun forceRegionBranch(buildInfo: File, region: String) {
+        if (!buildInfo.isFile || region.isBlank()) return
+        val text = buildInfo.readText()
+        val lines = text.lines().filter { it.isNotBlank() }
+        if (lines.isEmpty()) return
+        val header = psvHeader(lines.first())
+        if ("Branch" !in header) return
+        var changed = false
+        val rows = lines.drop(1).map { line ->
+            val cells = line.split("|").toMutableList()
+            val row = header.zip(cells).toMap()
+            if (row["Product"] == TARGET_PRODUCT) {
+                val idx = header.indexOf("Branch")
+                if (cells.getOrNull(idx) != region) { cells[idx] = region; changed = true }
+                val tagIdx = header.indexOf("Tags")
+                if (tagIdx >= 0) {
+                    val regionTag = region.uppercase(Locale.ROOT) + "?"
+                    val newTags = row["Tags"]?.takeIf { it.isNotBlank() }?.let { REGION_TAG.replace(it, regionTag) }
+                        ?: listOf("speech", "text").joinToString(":") { "Windows $PLATFORM_ARCH ${region.uppercase(Locale.ROOT)}? enUS $it?" }
+                    if (cells[tagIdx] != newTags) { cells[tagIdx] = newTags; changed = true }
+                }
+            }
+            cells
+        }
+        if (!changed) return
+        val out = (listOf(lines.first()) + rows.map { it.joinToString("|") }).joinToString("\n") + "\n"
+        writeAtomically(buildInfo, out.toByteArray())
+    }
+
     // The region as the Battle.net app records it: as the Branch, and as the region tag (e.g. "US?") in Tags.
     private fun regionColumns(branch: String, tags: String?): Map<String, String> {
         val region = branch.uppercase(Locale.ROOT)
