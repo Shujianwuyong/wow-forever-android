@@ -978,6 +978,9 @@ enum class GameRegion(val label: String) {
     /** The region's name in Blizzard's patch server tables. */
     val cdnRegion get() = name.lowercase()
 
+    /** CN uses NetEase's BGS endpoint; all other regions use the global one. */
+    val bgsHost get() = if (this == CN) "cn.actual.battlenet.com.cn" else "${name}.actual.battle.net"
+
     companion object {
         private const val KEY_REGION = "region"
 
