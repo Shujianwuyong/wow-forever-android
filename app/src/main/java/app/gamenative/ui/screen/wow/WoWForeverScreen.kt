@@ -1253,7 +1253,10 @@ private fun prepareLaunch(context: Context, gameRoot: File, gpu: GpuProfile, scr
 
     check(File(gameRoot, BUILD_INFO).exists()) { "Missing $BUILD_INFO in $gameRoot. Copy it from your WoW install." }
     try {
-        ensureGameConfig(gameRoot, screenSize, GameRegion.saved(context))
+        // CN build: force the China region so Config.wtf portal and .build.info Branch both point at CN.
+        // Without a manual region pick, saved() is null and the install falls back to its US default,
+        // which makes the game connect to US realms and disconnect at character select (WOW51900243).
+        ensureGameConfig(gameRoot, screenSize, GameRegion.CN)
     } catch (e: Exception) {
         if (e.isPermissionDenied()) throw StorageAccessDeniedException(e)
         throw e
