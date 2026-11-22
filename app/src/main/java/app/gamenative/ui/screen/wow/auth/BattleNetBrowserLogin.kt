@@ -101,7 +101,7 @@ internal object BattleNetBrowserLogin {
                 "Cannot protect the browser login request"
             }
             val log = File(gameRoot, "${WowClientDownloader.FLAVOR_DIR}/Logs/BrowserLogin.log")
-            val attempt = Attempt(bridge, request, "${region.name}.actual.battle.net", build, log)
+            val attempt = Attempt(bridge, request, region.bgsHost, build, log)
             diag(attempt, "browser login started (app ${app.gamenative.BuildConfig.VERSION_NAME}, ${region.name}, build $build)")
             active = attempt
             mutableUi.value = Ui.Waiting("Starting Battle.net browser login…")
