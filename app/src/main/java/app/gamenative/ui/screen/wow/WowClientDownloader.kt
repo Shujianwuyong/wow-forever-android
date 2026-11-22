@@ -98,6 +98,104 @@ object WowClientDownloader {
         return remote.copy(localVersion = localVersion, isOutdated = isOutdated)
     }
 
+    data class IntegrityReport(
+        val version: String = "",
+        val total: Int = 0,
+        val verified: Int = 0,
+        val missing: Int = 0,
+        val corrupt: Int = 0,
+        val indexMissing: Int = 0,
+        val problems: List<String> = emptyList(),
+    ) {
+        val isComplete get() = total > 0 && missing == 0 && corrupt == 0 && indexMissing == 0
+    }
+
+    /**
+     * CN patch: verifies every ARM64 client file on disk against the live build's install manifest (each file's
+     * content-addressed ckey/MD5), plus the archive indexes the client streams game data from. A CN build.info
+     * whose client binaries were left over from a US install passes checkVersion but disconnects at realm
+     * select with WOW51900243; this detects those silently stale/corrupt files.
+     */
+    fun verifyIntegrity(gameRoot: File, region: String, onStatus: (String) -> Unit): IntegrityReport {
+        val row = runCatching { activeBuild(File(gameRoot, BUILD_INFO)) }.getOrElse {
+            throw IOException("Missing $BUILD_INFO in $gameRoot")
+        }
+        val target = checkVersion(gameRoot, region) ?: fetchRemote(region, row)
+            ?: throw IOException("Couldn't reach the patch server")
+        val cdn = Cdn(
+            servers = httpsServers(target.remoteCdnServers.ifEmpty { row["CDN Servers"].orEmpty().let(::splitHosts) },
+                target.remoteCdnHosts.ifEmpty { row["CDN Hosts"].orEmpty().let(::splitHosts) }),
+            path = target.remoteCdnPath.ifEmpty { row["CDN Path"] ?: DEFAULT_CDN_PATH },
+        )
+        val buildConfigRaw = cdn.require("config", target.remoteBuildConfig.ifBlank { row.getValue("Build Key") })
+        val buildConfig = parseConfig(String(buildConfigRaw))
+        onStatus("Reading build ${target.remoteVersion.ifBlank { row["Version"].orEmpty() }} manifest...")
+        val files = parseInstall(blteDecode(cdn.require("data", buildConfig.getValue("install")[1])))
+            .filter { it.isClientBinary() }
+        check(files.isNotEmpty()) { "No Windows ARM64 client files in this build" }
+
+        val clientDir = File(gameRoot, FLAVOR_DIR)
+        val problems = mutableListOf<String>()
+        var verified = 0
+        var missing = 0
+        var corrupt = 0
+        files.forEachIndexed { index, entry ->
+            if (index % 10 == 0) onStatus("Verifying client files (${index + 1}/${files.size})...")
+            val local = File(clientDir, entry.relativePath)
+            when {
+                !local.isFile -> { missing++; if (problems.size < 12) problems += "MISSING ${entry.name}" }
+                md5Hex(local) != entry.ckey -> { corrupt++; if (problems.size < 12) problems += "CORRUPT ${entry.name}" }
+                else -> verified++
+            }
+        }
+
+        val cdnConfigRaw = target.remoteCdnConfig.takeIf { it.isNotBlank() }
+            ?.let { runCatching { cdn.require("config", it) }.getOrNull() }
+        val cdnConfig = cdnConfigRaw?.let { parseConfig(String(it)) }
+        val fromRemote = cdnConfig?.let { (it["archives"].orEmpty() + it["file-index"].orEmpty()).distinct() }
+        val fromLocal = row["CDN Key"]?.takeIf { it.isNotBlank() }?.let { key ->
+            runCatching { parseConfig(String(cdn.require("config", key))) }
+                .getOrNull()?.let { (it["archives"].orEmpty() + it["file-index"].orEmpty()).distinct() }
+        }
+        val indexKeys = fromRemote.takeUnless { it.isNullOrEmpty() } ?: fromLocal.orEmpty()
+        val indexMissing = indexKeys.count { !File(gameRoot, "Data/indices/$it.index").isFile }
+        if (indexMissing > 0 && problems.size < 12) problems += "$indexMissing archive index file(s) missing"
+
+        return IntegrityReport(
+            version = target.remoteVersion.ifBlank { row["Version"].orEmpty() },
+            total = files.size, verified = verified, missing = missing, corrupt = corrupt,
+            indexMissing = indexMissing, problems = problems,
+        )
+    }
+
+    /**
+     * CN patch: a clean re-download of the China client. Deletes every local client binary and archive index so
+     * nothing stale from a US/old install survives, then fetches the live CN build fresh from NetEase's CDN.
+     * WTF/ (settings, macros) and Interface/ (add-ons) are kept. Callers must back up anything else they need.
+     */
+    fun repairClient(gameRoot: File, region: String, onStatus: (String) -> Unit) {
+        val clientDir = File(gameRoot, FLAVOR_DIR)
+        val keep = setOf("WTF", "Interface", "Cache", "Screenshots", "Logs")
+        onStatus("Removing stale client files...")
+        clientDir.listFiles()?.forEach { child ->
+            if (child.name !in keep) {
+                if (child.isDirectory) child.deleteRecursively() else child.delete()
+            }
+        }
+        File(gameRoot, "Data/indices").deleteRecursively()
+        File(gameRoot, "Data/config").deleteRecursively()
+        File(gameRoot, BUILD_INFO).delete()
+
+        onStatus("Downloading the China client from NetEase CDN...")
+        install(gameRoot, region, onStatus)
+        onStatus("Verifying the fresh install...")
+        val report = verifyIntegrity(gameRoot, region, onStatus)
+        check(report.isComplete) {
+            "Re-download incomplete: ${report.verified}/${report.total} client files, " +
+                "${report.missing} missing, ${report.corrupt} corrupt, ${report.indexMissing} indexes missing"
+        }
+    }
+
     private fun fetchRemote(region: String, localRow: Map<String, String>? = null): VersionCheckResult? {
         val versions = runCatching { fetchText("$PATCH_URL/versions") }.getOrElse {
             Timber.w(it, "fetchRemote: http call failed")
